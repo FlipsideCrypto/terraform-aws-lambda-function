@@ -20,10 +20,10 @@ output "function_name" {
 
 output "role_name" {
   description = "Lambda IAM role name"
-  value       = local.enabled ? aws_iam_role.this[0].name : null
+  value       = local.role_name
 }
 
 output "role_arn" {
   description = "Lambda IAM role ARN"
-  value       = local.enabled ? aws_iam_role.this[0].arn : null
+  value       = local.role_arn
 }

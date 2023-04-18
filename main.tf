@@ -3,6 +3,58 @@ locals {
   account_id  = local.enabled ? data.aws_caller_identity.this[0].account_id : null
   partition   = local.enabled ? data.aws_partition.this[0].partition : null
   region_name = local.enabled ? data.aws_region.this[0].name : null
+
+  ssm_parameter_policy_enabled = try((local.enabled && var.ssm_parameter_names != null && length(var.ssm_parameter_names) > 0), false)
+}
+
+data "aws_iam_policy_document" "ssm" {
+  count = local.ssm_parameter_policy_enabled ? 1 : 0
+
+  statement {
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:GetParametersByPath",
+    ]
+
+    resources = formatlist("arn:${local.partition}:ssm:${local.region_name}:${local.account_id}:parameter%s", var.ssm_parameter_names)
+  }
+}
+
+module "role" {
+  source  = "cloudposse/iam-role/aws"
+  version = "0.17.0"
+
+  policy_description = "Managed by Terraform"
+  role_description   = "Managed by Terraform"
+
+  principals = {
+    Service = concat(["lambda.amazonaws.com"], var.lambda_at_edge_enabled ? ["edgelambda.amazonaws.com"] : [])
+  }
+
+  managed_policy_arns = concat([
+    "arn:${local.partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+    ], var.custom_iam_policy_arns, var.cloudwatch_lambda_insights_enabled ? [
+    "arn:${local.partition}:iam::aws:policy/CloudWatchLambdaInsightsExecutionRolePolicy",
+    ] : [], var.vpc_config != null ? [
+    "arn:${local.partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+    ] : [], var.tracing_config_mode != null ? [
+    "arn:${local.partition}:iam::aws:policy/AWSXRayDaemonWriteAccess",
+  ] : [])
+
+  policy_documents = data.aws_iam_policy_document.ssm.*.json
+
+  policy_document_count = local.ssm_parameter_policy_enabled ? 1 : 0
+
+  permissions_boundary = var.permissions_boundary
+
+  attributes = ["lambda", var.function_name]
+  context    = module.this.context
+}
+
+locals {
+  role_arn  = module.role.arn
+  role_name = module.role.name
 }
 
 module "cloudwatch_log_group" {
@@ -31,7 +83,7 @@ resource "aws_lambda_function" "this" {
   package_type                   = var.package_type
   publish                        = var.publish
   reserved_concurrent_executions = var.reserved_concurrent_executions
-  role                           = aws_iam_role.this[0].arn
+  role                           = local.role_arn
   runtime                        = var.runtime
   s3_bucket                      = var.s3_bucket
   s3_key                         = var.s3_key
